@@ -49,37 +49,44 @@ def plot_loss_curve(g_losses, d_losses, save_path=None):
 
 def plot_pv_output(real_data, generated_data, station_idx=0, save_path=None):
     """绘制真实和生成的PV输出对比图"""
-    plt.figure(figsize=(12, 6))
-
-    # 获取数据
-    real = real_data[0, station_idx, :].cpu().detach().numpy()
+    plt.figure(figsize=(12, 8))
+    # 对真实数据在batch维度上取均值，得到一条曲线
+    real_mean = real_data[:, station_idx, :].mean(dim=0).cpu().detach().numpy()
     # 创建完整的时间轴（288个点，对应24小时，每5分钟一个点）
-    time_points = range(len(real))
-    # 绘制真实数据
-    plt.plot(time_points, real, 'r-', linewidth=2, label='Real scenarios')
-    # 绘制所有生成数据
+    time_points = range(len(real_mean))
+
+    # 绘制所有生成数据（黑色线条）
     for i in range(generated_data.size(0)):
         gen_curve = generated_data[i, station_idx, :].cpu().detach().numpy()
         if i == 0:
-            plt.plot(time_points, gen_curve, 'black', alpha=0.7, label='Generated scenarios')
+            plt.plot(time_points, gen_curve, 'black', linewidth=0.8, alpha=0.7, label='Generated scenarios')
         else:
-            plt.plot(time_points, gen_curve, 'black', alpha=0.7)
+            plt.plot(time_points, gen_curve, 'black', linewidth=0.8, alpha=0.7)
+
+    # 绘制真实数据均值（红色线条）
+    plt.plot(time_points, real_mean, 'r-', linewidth=2.0, label='Real scenarios')
 
     # 设置图表属性
-    plt.title('PV data on cGAN')
-    plt.xlabel('Time (5 min)')
+    plt.title('PV Power Output Scenarios')
+    plt.xlabel('Time (5min)')
     plt.ylabel('PV power output (MW)')
-    plt.grid(True)
-    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.3)
+    plt.legend(loc='upper right')
 
-    # 设置x轴刻度，每小时显示一个刻度（每12个点）
-    hour_ticks = range(0, len(real), 12)
-    hour_labels = [f"{h}" for h in range(0, 24)]
-    if len(hour_ticks) > len(hour_labels):
-        hour_ticks = hour_ticks[:len(hour_labels)]
-    elif len(hour_ticks) < len(hour_labels):
-        hour_labels = hour_labels[:len(hour_ticks)]
-    plt.xticks(hour_ticks, hour_labels)
+    # 设置x轴刻度，每30个点显示一个刻度
+    x_ticks = range(0, len(real_mean), 30)
+    x_labels = [f"{i}" for i in x_ticks]
+    plt.xticks(x_ticks, x_labels)
+
+    # 获取y轴范围并设置刻度
+    y_min = 0
+    y_max = max(real_mean.max(), generated_data[:, station_idx, :].max().item()) * 1.1
+    y_ticks = np.linspace(0, y_max, 7)  # 创建7个均匀分布的刻度点
+    plt.yticks(y_ticks)
+    plt.ylim(y_min, y_max)
+
+    # 调整布局
+    plt.tight_layout()
 
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -91,31 +98,48 @@ def plot_pv_output(real_data, generated_data, station_idx=0, save_path=None):
 def plot_pv_distribution(real_data, generated_data, station_idx=0, save_path=None):
     """
     绘制真实和生成的光伏输出分布对比图
-
     参数:
     - real_data: 真实数据，形状为 [batch_size, input_dim, seq_len]
-    - generated_data: 生成数据，形状为 [batch_size, input_dim, seq_len] 或 [batch_size, input_dim, seq_len, 1]
+    - generated_data: 生成数据，形状为 [batch_size, input_dim, seq_len]
     - station_idx: 要绘制的电站索引
-    - save_path: 保存路径，如果为None则显示图
     """
-    plt.figure(figsize=(6, 5))  # 调整为单独图的大小
-    # 处理生成数据的维度，如果是4维则压缩最后一维
-    if len(generated_data.shape) == 4:
-        generated_data = generated_data.squeeze(-1)
+    plt.figure(figsize=(10, 6))
 
-    # 提取所有批次的指定电站数据
-    real_samples = real_data[:, station_idx, :].reshape(-1).cpu().numpy()
-    gen_samples = generated_data[:, station_idx, :].detach().cpu().numpy().reshape(-1)
+    # 提取指定电站的所有数据点
+    real_values = real_data[:, station_idx, :].flatten().cpu().numpy()
+    gen_values = generated_data[:, station_idx, :].flatten().cpu().numpy()
 
-    # 绘制分布
-    plt.hist(real_samples, bins=50, alpha=0.5, color='blue', label='Real scenarios', density=True)
-    plt.hist(gen_samples, bins=50, alpha=0.5, color='red', label='Generated scenarios', density=True)
+    # 设置直方图的参数
+    bins = np.linspace(0, 100, 26)  # 0到100 MW，分5个区间
 
+    # 计算直方图数据
+    real_hist, _ = np.histogram(real_values, bins=bins, density=True)
+    gen_hist, _ = np.histogram(gen_values, bins=bins, density=True)
+
+    # 计算每个bin的中心点
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+
+    # 绘制真实数据的柱状图
+    plt.bar(bin_centers, real_hist, width=(bins[1] - bins[0]) * 0.8,
+            color='blue', alpha=0.7, label='Real scenarios')
+
+    # 绘制生成数据的折线图
+    plt.plot(bin_centers, gen_hist, 'r-', linewidth=2, marker='o',
+             markersize=4, label='Generated scenarios')
+
+    # 设置图表属性
     plt.xlabel('PV power output (MW)')
     plt.ylabel('Probability')
-    plt.title('PV data on cGAN')
-    plt.legend()
-    plt.grid(True)
+    plt.grid(True, linestyle='--', alpha=0.3)
+    plt.legend(loc='upper right')
+
+    # 设置x轴和y轴范围
+    plt.xlim(0, 100)
+    max_prob = max(np.max(real_hist), np.max(gen_hist)) * 1.1
+    plt.ylim(0, max_prob)
+
+    # 调整布局
+    plt.tight_layout()
 
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -124,28 +148,14 @@ def plot_pv_distribution(real_data, generated_data, station_idx=0, save_path=Non
         plt.show()
 
 
-def plot_attention_map(attention_weights, save_path=None):
-    """
-    绘制注意力权重热力图
-
-    参数:
-    - attention_weights: 注意力权重，形状为 [seq_len, seq_len]
-    - save_path: 保存路径，如果为None则显示图像
-    """
-    plt.figure(figsize=(10, 8))
-
-    # 绘制热力图
-    plt.imshow(attention_weights.cpu().numpy(), cmap='viridis')
-    plt.colorbar(label='注意力权重')
-    plt.xlabel('序列位置')
-    plt.ylabel('序列位置')
-    plt.title('自注意力权重图')
-
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
+def plot_attention_map(attention, save_path):
+    # attention: [batch_size, input_dim, input_dim]
+    attention = attention[0].cpu().numpy()  # 取第一个样本，形状 [input_dim, input_dim]
+    plt.imshow(attention, cmap='viridis')
+    plt.colorbar()
+    plt.title("Spatial Attention Map")
+    plt.savefig(save_path)
+    plt.close()
 
 
 def compute_mmd(x, y, gamma=1.0):

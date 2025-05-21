@@ -25,7 +25,7 @@ class SpatialAttention(nn.Module):
         self.W_2 = nn.Linear(hidden_dim, hidden_dim)  # W^S_2
 
         # Softmax层 - 在input_dim维度上应用softmax
-        self.softmax = nn.Softmax(dim=-1)
+        self.softmax = nn.Softmax(dim=-2)
 
         # 定义邻接矩阵A，可学习的参数
         self.A = nn.Parameter(torch.FloatTensor(input_dim, input_dim))
@@ -42,7 +42,7 @@ class SpatialAttention(nn.Module):
         """
         输入:
             x - [batch_size, input_dim, seq_len, hidden_dim]
-            hl - 上一层输出 [batch_size, input_dim, seq_len, hidden_dim]，如果为None则初始化
+            hl - 上一层输出 [batch_size, input_dim, seq_len, hidden_dim]
         输出:
             out - [batch_size, input_dim, seq_len, hidden_dim]
             attention - [batch_size, input_dim, input_dim, hidden_dim]
@@ -75,7 +75,7 @@ class SpatialAttention(nn.Module):
                 XS = hl
 
         # 将XS重塑为[batch_size*input_dim*seq_len, hidden_dim]以应用线性层
-        XS_reshaped = XS.view(batch_size * input_dim * seq_len, -1)
+        XS_reshaped = XS.reshape(batch_size * input_dim * seq_len, -1)
 
         # 计算QS, KS, VS
         q = self.W_q(XS_reshaped).view(batch_size, input_dim, seq_len,
@@ -90,7 +90,7 @@ class SpatialAttention(nn.Module):
         # q: [batch_size, input_dim, seq_len, hidden_dim]
         # k: [batch_size, input_dim, seq_len, hidden_dim]
         # 结果: [batch_size, input_dim, input_dim, hidden_dim]
-        energy = torch.einsum('bish,bjsh->bijs', q, k) / math.sqrt(self.hidden_dim)
+        energy = torch.einsum('bish,bjsh->bijh', q, k) / math.sqrt(self.hidden_dim)
 
         # 应用softmax得到注意力矩阵 M^S
         attention = self.softmax(energy)  # [batch_size, input_dim, input_dim, hidden_dim]
@@ -99,7 +99,7 @@ class SpatialAttention(nn.Module):
         # attention: [batch_size, input_dim, input_dim, hidden_dim]
         # v: [batch_size, input_dim, seq_len, hidden_dim]
         # 结果: [batch_size, input_dim, seq_len, hidden_dim]
-        context = torch.einsum('bijs,bjsh->bish', attention, v)
+        context = torch.einsum('bijh,bjsh->bish', attention, v)
 
         # 前馈网络 - Y^S = W^S_1(ReLU(W^S_0(context))))
         # 将context重塑为[batch_size*input_dim*seq_len, hidden_dim]以应用线性层
@@ -140,7 +140,7 @@ class TemporalAttention(nn.Module):
         self.W_2 = nn.Linear(hidden_dim, hidden_dim)  # W^T_2
 
         # Softmax层 - 在seq_len维度上应用softmax
-        self.softmax = nn.Softmax(dim=-1)
+        self.softmax = nn.Softmax(dim=-2)
 
         # 定义时间位置编码，可学习的参数
         self.pos_encoding = nn.Parameter(torch.FloatTensor(seq_len, hidden_dim))
@@ -160,8 +160,7 @@ class TemporalAttention(nn.Module):
         """
         batch_size, input_dim, seq_len, _ = x.size()
 
-        # 计算ET = 时间位置编码
-        # pos_encoding: [seq_len, hidden_dim]
+        # 计算ET = 时间位置编码  pos_encoding: [seq_len, hidden_dim]
         # 扩展为[batch_size, input_dim, seq_len, hidden_dim]，使用广播
         ET = self.pos_encoding.unsqueeze(0).unsqueeze(0).expand(batch_size, input_dim, -1, -1)
 
@@ -172,7 +171,7 @@ class TemporalAttention(nn.Module):
             XT = hl + ET
 
         # 将XT重塑为[batch_size*input_dim*seq_len, hidden_dim]以应用线性层
-        XT_reshaped = XT.view(batch_size * input_dim * seq_len, -1)
+        XT_reshaped = XT.reshape(batch_size * input_dim * seq_len, -1)
 
         # 计算QT, KT, VT
         q = self.W_q(XT_reshaped).view(batch_size, input_dim, seq_len,
@@ -185,7 +184,7 @@ class TemporalAttention(nn.Module):
         # 计算注意力分数，使用einsum进行四维张量乘法
         # 在seq_len维度上计算注意力
         # 结果: [batch_size, input_dim, input_dim, hidden_dim]
-        energy = torch.einsum('bish,bjsh->bijs', q, k) / math.sqrt(self.hidden_dim)
+        energy = torch.einsum('bish,bjsh->bijh', q, k) / math.sqrt(self.hidden_dim)
 
         # 应用softmax得到注意力矩阵 M^T
         attention = self.softmax(energy)  # [batch_size, input_dim, input_dim, hidden_dim]
@@ -194,7 +193,7 @@ class TemporalAttention(nn.Module):
         # attention: [batch_size, input_dim, input_dim, hidden_dim]
         # v: [batch_size, input_dim, seq_len, hidden_dim]
         # 结果: [batch_size, input_dim, seq_len, hidden_dim]
-        context = torch.einsum('bijs,bjsh->bish', attention, v)
+        context = torch.einsum('bijh,bjsh->bish', attention, v)
 
         # 前馈网络 - Y^T = W^T_1(ReLU(W^T_0(context))))
         # 将context重塑为[batch_size*input_dim*seq_len, hidden_dim]以应用线性层
@@ -225,6 +224,9 @@ class Generator(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
+        # 1x1 卷积层，将 [batch_size, 1, input_dim, seq_len] 转换为 [batch_size, hidden_dim, input_dim, seq_len]
+        self.conv1x1 = nn.Conv2d(in_channels=1, out_channels=hidden_dim, kernel_size=1)
+
         # 初始映射层
         self.initial_mapping = nn.Linear(hidden_dim, hidden_dim)
 
@@ -243,87 +245,63 @@ class Generator(nn.Module):
             nn.Linear(3 * hidden_dim, hidden_dim) for _ in range(num_layers)
         ])
 
-        # 噪声映射
-        self.noise_mapping = nn.Linear(seq_len, hidden_dim)
-
         # 输出层
         self.output_layer = nn.Linear(hidden_dim, output_dim)  #[batch_size, input_dim, seq_len, output_dim], output_dim=1 表示功率值
 
-    def forward(self, x, noise=None, adj_matrix=None):
-        """
-        x: 输入数据 [batch_size, input_dim, seq_len, hidden_dim]
-        noise: 随机噪声 [batch_size, seq]
-        """
+    def forward(self, x, adj_matrix=None):
+        # x: 输入数据 [batch_size, input_dim, seq_len]
         batch_size = x.size(0)
+        device = x.device
 
-        # 初始化hl
-        hl = None
+        # 生成噪声 Z [batch_size, seq_len]
+        Z = torch.randn(batch_size, self.seq_len, device=device).cuda()
+        # 将 Z 扩展到 [batch_size, input_dim, seq_len]
+        Z = Z.unsqueeze(1).expand(-1, self.input_dim, -1)
+        # 将 Z 添加到 x
+        x_with_noise = x + Z  # [batch_size, input_dim, seq_len]
+        # 将 x_with_noise 转换为 [batch_size, 1, input_dim, seq_len] 以便于卷积
+        x_with_noise = x_with_noise.unsqueeze(1)
 
-        # 如果x不是四维张量，将其重塑
-        if len(x.shape) == 3:
-            # 假设x是[batch_size, input_dim, seq_len]
-            x = x.unsqueeze(-1).expand(-1, -1, -1, self.hidden_dim)
-            # 应用初始映射
-            x_reshaped = x.view(batch_size * self.input_dim * self.seq_len, -1)
-            x = self.initial_mapping(x_reshaped).view(batch_size, self.input_dim, self.seq_len, -1)
+        # 通过 1x1 卷积层
+        x_conv = self.conv1x1(x_with_noise)  # [batch_size, hidden_dim, input_dim, seq_len]
+        # 调整形状为 [batch_size, input_dim, seq_len, hidden_dim]
+        x_conv = x_conv.permute(0, 2, 3, 1)  # [batch_size, input_dim, seq_len, hidden_dim]
+        # 初始化 hl 为 x_conv
+        hl = x_conv
+
+        attention_weights = []
 
         # Transformer层
         for i in range(self.num_layers):
             # 空间自注意力层
-            YS, attn_S = self.spatial_transformers[i](x, hl, adj_matrix)
-
+            YS, attn_S = self.spatial_transformers[i](x_conv, hl, adj_matrix)
             # 时间自注意力层
-            YT, attn_T = self.temporal_transformers[i](x, hl)
-
-            # 合并hl, YS, YT
-            # 将hl, YS, YT在hidden_dim维度上拼接
-            if hl is None:
-                # 初始化hl为全零张量
-                hl = torch.zeros_like(YS)
+            YT, attn_T = self.temporal_transformers[i](x_conv, hl)
+            attention_weights.append((attn_S, attn_T))
 
             # 拼接 [batch_size, input_dim, seq_len, 3*hidden_dim]
             merged = torch.cat([hl, YS, YT], dim=-1)
-
             # 将merged重塑为[batch_size*input_dim*seq_len, 3*hidden_dim]以应用线性层
             merged_reshaped = merged.view(batch_size * self.input_dim * self.seq_len, -1)
 
             # 应用合并层 Wm，得到h_l+1
             hl = self.merge_layers[i](merged_reshaped)
             hl = F.relu(hl)
-
             # 将hl重塑回[batch_size, input_dim, seq_len, hidden_dim]
             hl = hl.view(batch_size, self.input_dim, self.seq_len, -1)
 
-        if noise is None:
-            # 生成[batch_size, seq_len]维度的标准高斯噪声
-            noise = torch.randn(batch_size, self.seq_len)
-
-        # 将噪声映射到hidden_dim维度 [batch_size, seq_len] -> [batch_size, hidden_dim]
-        noise_features = self.noise_mapping(noise)
-
-        # 扩展为[batch_size, input_dim, seq_len, hidden_dim]
-        # 首先扩展为[batch_size, 1, 1, hidden_dim]，然后扩展到所有维度
-        noise_features = noise_features.unsqueeze(1).unsqueeze(1)
-        expanded_noise = noise_features.expand(-1, self.input_dim, self.seq_len, -1)
-
-        # 合并特征和噪声
-        final_features = hl + expanded_noise
-
         # 将final_features重塑为[batch_size*input_dim*seq_len, hidden_dim]以应用线性层
-        final_features_reshaped = final_features.view(batch_size * self.input_dim * self.seq_len, -1)
-
+        final_features_reshaped = hl.view(batch_size * self.input_dim * self.seq_len, -1)
         # 输出层
         output = self.output_layer(final_features_reshaped)
-
         # 将输出重塑回[batch_size, input_dim, seq_len, output_dim]
         output = output.view(batch_size, self.input_dim, self.seq_len, -1)
 
-        return output
+        return output, attention_weights
 
 
 class Discriminator(nn.Module):
     """CM-GAN判别器"""
-
     def __init__(self, input_dim, seq_len, hidden_dim, num_layers, output_dim=1):
         super(Discriminator, self).__init__()
         self.input_dim = input_dim
@@ -331,8 +309,8 @@ class Discriminator(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
-        # 初始映射层
-        self.initial_mapping = nn.Linear(hidden_dim, hidden_dim)
+        # 1x1 卷积层，将 [batch_size, 1, input_dim, seq_len] 转换为 [batch_size, hidden_dim, input_dim, seq_len]
+        self.conv1x1 = nn.Conv2d(in_channels=1, out_channels=hidden_dim, kernel_size=1)
 
         # 空间自注意力层
         self.spatial_transformers = nn.ModuleList([
@@ -350,61 +328,47 @@ class Discriminator(nn.Module):
         ])
 
         # 输出层
-        self.output_layers = nn.Sequential(
-            nn.Linear(hidden_dim * input_dim * seq_len, hidden_dim),
-            nn.LeakyReLU(0.1),
-            nn.Linear(hidden_dim, output_dim)
-        )
+        self.W_d0 = nn.Linear(hidden_dim, hidden_dim)  # W_d0
+        self.flatten = nn.Flatten()  # 展平操作
+        self.W_d1 = nn.Linear(hidden_dim * input_dim * seq_len, output_dim)  # W_d1
+        self.sigmoid = nn.Sigmoid()  # Sigmoid 激活
 
     def forward(self, x, adj_matrix=None):
         """
-        x: 输入数据 [batch_size, input_dim, seq_len, hidden_dim]
+        x: 输入数据 [batch_size, input_dim, seq_len]
         """
         batch_size = x.size(0)
 
-        # 初始化hl
-        hl = None
-
-        # 如果x不是四维张量，将其重塑
-        if len(x.shape) == 3:
-            # 假设x是[batch_size, input_dim, seq_len]
-            x = x.unsqueeze(-1).expand(-1, -1, -1, self.hidden_dim)
-            # 应用初始映射
-            x_reshaped = x.view(batch_size * self.input_dim * self.seq_len, -1)
-            x = self.initial_mapping(x_reshaped).view(batch_size, self.input_dim, self.seq_len, -1)
+        x = x.unsqueeze(1)  # 将 x 转换为 [batch_size, 1, input_dim, seq_len] 以便于卷积
+        x_conv = self.conv1x1(x)  # [batch_size, hidden_dim, input_dim, seq_len]
+        x_conv = x_conv.permute(0, 2, 3, 1)  # [batch_size, input_dim, seq_len, hidden_dim]
+        # 初始化 hl
+        hl = x_conv
 
         # Transformer层
         for i in range(self.num_layers):
             # 空间自注意力层
-            YS, attn_S = self.spatial_transformers[i](x, hl, adj_matrix)
-
+            YS, attn_S = self.spatial_transformers[i](x_conv, hl, adj_matrix)
             # 时间自注意力层
-            YT, attn_T = self.temporal_transformers[i](x, hl)
+            YT, attn_T = self.temporal_transformers[i](x_conv, hl)
 
-            # 合并hl, YS, YT
-            # 将hl, YS, YT在hidden_dim维度上拼接
-            if hl is None:
-                # 初始化hl为全零张量
-                hl = torch.zeros_like(YS)
-
-            # 拼接 [batch_size, input_dim, seq_len, 3*hidden_dim]
+            # 拼接hl, YS, YT [batch_size, input_dim, seq_len, 3*hidden_dim]
             merged = torch.cat([hl, YS, YT], dim=-1)
-
             # 将merged重塑为[batch_size*input_dim*seq_len, 3*hidden_dim]以应用线性层
             merged_reshaped = merged.view(batch_size * self.input_dim * self.seq_len, -1)
 
             # 应用合并层 Wm，得到h_l+1
             hl = self.merge_layers[i](merged_reshaped)
             hl = F.relu(hl)
-
             # 将hl重塑回[batch_size, input_dim, seq_len, hidden_dim]
             hl = hl.view(batch_size, self.input_dim, self.seq_len, -1)
 
-        # 将特征展平
-        features_flat = hl.view(batch_size, -1)
-        print(f"Flattened shape: {features_flat.shape}")  # 添加调试语句
-
-        # 输出层
-        validity = self.output_layers(features_flat)
+        h_last = hl  # [batch_size, input_dim, seq_len, hidden_dim]
+        h_last_reshaped = h_last.reshape(batch_size * self.input_dim * self.seq_len, -1)
+        h_after_W_d0 = self.W_d0(h_last_reshaped)  # [batch_size*input_dim*seq_len, hidden_dim]
+        h_W_d0_reshaped = h_after_W_d0.view(batch_size, self.input_dim, self.seq_len, -1)
+        h_flattened = self.flatten(h_W_d0_reshaped)  # [batch_size, 69 * 288 * 32]
+        output = self.W_d1(h_flattened)  # [batch_size, output_dim]
+        validity = self.sigmoid(output)  # [batch_size, output_dim]
 
         return validity

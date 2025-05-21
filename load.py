@@ -46,6 +46,35 @@ class SolarDataset(Dataset):
         sample = torch.tensor(self.samples[idx], dtype=torch.float32)  # 取出第 idx个样本，形状(69, sequence_length)
         return sample, self.adj_matrix  # 返回样本和邻接矩阵
 
+class PaddedDataLoader:
+    def __init__(self, dataloader, batch_size, dataset):
+        self.dataloader = dataloader
+        self.batch_size = batch_size
+        self.dataset = dataset
+
+    def __iter__(self):
+        for batch in self.dataloader:
+            power_data, adj_matrix = batch
+
+            # 检查批次是否不完整
+            if power_data.size(0) < self.batch_size:
+                # 获取当前批次大小
+                current_size = power_data.size(0)
+                # 需要补充的样本数
+                pad_size = self.batch_size - current_size
+
+                # 从之前的批次中随机选择样本进行补充
+                pad_indices = torch.randint(0, len(self.dataset), (pad_size,))
+                pad_samples = torch.stack([self.dataset[i][0] for i in pad_indices])
+
+                # 合并原始批次和补充样本
+                pad_samples = pad_samples.to(power_data.device)
+                power_data = torch.cat([power_data, pad_samples], dim=0)
+
+            yield power_data, adj_matrix
+
+    def __len__(self):
+        return len(self.dataloader)
 
 def collate_fn(batch):
     # batch 是一个列表，包含 (sample, adj_matrix) 元组
@@ -92,5 +121,9 @@ def load_solar(batch_size=32, sequence_length=288, test_size=0.2, sigma=100.0):
         shuffle=False,
         collate_fn=collate_fn
     )
+
+    if pad_last and not drop_last:
+        train_loader = PaddedDataLoader(train_loader, batch_size, train_dataset)
+        test_loader = PaddedDataLoader(test_loader, batch_size, test_dataset)
 
     return train_loader, test_loader, scaler, adj_matrix
